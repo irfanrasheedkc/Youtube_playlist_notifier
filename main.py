@@ -4,10 +4,10 @@ keep_alive()
 import os
 import telebot
 import requests
-
-from datetime import datetime, timezone, timedelta
+import datetime
+from datetime import timezone, timedelta
 import time
-
+from datetime import datetime
 from pymongo import MongoClient
 
 import threading
@@ -52,7 +52,6 @@ def get_playlist_handler(message):
 def get_last_video_info(playlist_id):
     base_url = 'https://www.googleapis.com/youtube/v3/playlistItems'
     playlist_id = playlist_id.split("list=")[-1]
-    print(f"Playlist id:{playlist_id}")
     params = {
         'key': "AIzaSyB7q2z7ski2Vs2Hb4Aa1LPBzEE7hIMKKks",
         'part': 'snippet',
@@ -61,10 +60,8 @@ def get_last_video_info(playlist_id):
     }
     response = requests.get(base_url, params=params)
     data = response.json()
-    print(data)
     if 'items' in data and len(data['items']) > 0:
         last_video_info = data['items'][0]['snippet']
-        print(f"Last video Info {last_video_info}")
         video_title = last_video_info['title']
         video_link = f"https://www.youtube.com/watch?v={last_video_info['resourceId']['videoId']}"
         return video_title, video_link
@@ -106,7 +103,6 @@ def handle_message(message):
     # Check if the user is responding to the /add_playlist command
     if message.reply_to_message and message.reply_to_message.text == "Please enter the YouTube playlist link as a reply to this message:":
         playlist_link = message.text.strip()
-        print(playlist_link)
         user_chat_id = message.chat.id
         playlist_title = get_playlist_title(playlist_link,user_chat_id)
         if playlist_title:
@@ -118,10 +114,28 @@ def handle_message(message):
         # If the user sends any other message, respond with the start message and options
         bot.reply_to(message, start_message)
 
+from dateutil import parser as date_parser
+import pytz
+
 def convert_to_indian_time(utc_time_str):
-    utc_time = datetime.strptime(utc_time_str, '%Y-%m-%dT%H:%M:%SZ')
-    ist_time = utc_time.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=5, minutes=30)))
+    # Parse the UTC time string to a datetime object using dateutil.parser
+    utc_time = date_parser.parse(utc_time_str)
+
+    # If the parsed datetime is timezone-aware (contains TZ info), convert to UTC timezone
+    if utc_time.tzinfo:
+        utc_time = utc_time.astimezone(pytz.utc)
+
+    # Define the Indian Standard Time (IST) timezone
+    ist = pytz.timezone('Asia/Kolkata')
+
+    # Convert the UTC time to IST using the defined timezone
+    ist_time = utc_time.astimezone(ist)
+
+    # Format the IST time as a string and return
     return ist_time.strftime('%Y-%m-%d %H:%M:%S')
+
+
+
 
 def get_playlist_title(playlist_link,user_chat_id):
     try:
@@ -211,33 +225,35 @@ def send_notification(user_chat_id, playlist_title, playlist_link , latest_video
         print(f"Error sending notification to user {user_chat_id}: {e}")
 
 def check_playlists():
-    playlists = collection.find()
-    for playlist_info in playlists:
-        playlist_title = playlist_info['title']
-        playlist_link = playlist_info['link']
-        last_db_video_time = playlist_info.get('last_video_time')
+    try:
+        playlists = collection.find()
+        for playlist_info in playlists:
+            playlist_title = playlist_info['title']
+            playlist_link = playlist_info['link']
+            last_db_video_time = playlist_info.get('last_video_time')
 
-        last_api_video_time = get_last_video_time(playlist_link)
-        if not last_api_video_time:
-            continue
-
-        # Convert UTC time to Indian Standard Time (IST)
-        last_api_video_time_ist = convert_to_indian_time(last_api_video_time)
-
-        if last_db_video_time and last_api_video_time != last_db_video_time:
-            # New video found, notify the user
-            user_chat_id = playlist_info['user_chat_id']
             playlist_id = playlist_link.split("list=")[-1]
-            latest_video_title, latest_video_link = get_last_video_info(playlist_id)
-            message = f"New video added to playlist '{playlist_title}'\nLast Video Time (IST): {last_api_video_time_ist}"
-            send_notification(user_chat_id, playlist_title, playlist_link , latest_video_title , latest_video_link , last_api_video_time)
 
-            # Update the last_video_time in the database
-            collection.update_one({'_id': playlist_info['_id']}, {'$set': {'last_video_time': last_api_video_time}})
-        elif not last_db_video_time:
-            # This is the first time checking, so just update the last_video_time in the database
-            collection.update_one({'_id': playlist_info['_id']}, {'$set': {'last_video_time': last_api_video_time}})
 
+            last_api_video_time = get_last_video_time(playlist_id)
+
+            # Convert UTC time to Indian Standard Time (IST)
+            last_api_video_time_ist = convert_to_indian_time(last_api_video_time)
+
+            if not last_api_video_time:
+                continue
+            print(f"{last_api_video_time_ist} != {last_db_video_time}\n")
+            if last_db_video_time and last_api_video_time_ist != last_db_video_time:
+                # New video found, notify the user
+                user_chat_id = playlist_info['user_chat_id']
+                latest_video_title, latest_video_link = get_last_video_info(playlist_id)
+                send_notification(user_chat_id, playlist_title, playlist_link , latest_video_title , latest_video_link , last_api_video_time_ist)
+
+            elif not last_db_video_time:
+                # This is the first time checking, so just update the last_video_time in the database
+                collection.update_one({'_id': playlist_info['_id']}, {'$set': {'last_video_time': last_api_video_time}})
+    finally:
+        pass
 def start_routine_checking(interval_minutes):
     while True:
         check_playlists()
@@ -257,7 +273,7 @@ def stop_mongodb_client():
 if __name__ == '__main__':
     try:
         # Start the routine checking in a separate thread
-        interval_minutes = 0.1
+        interval_minutes = 1
         checking_thread = threading.Thread(target=start_routine_checking, args=(interval_minutes,))
         checking_thread.start()
 
@@ -266,4 +282,5 @@ if __name__ == '__main__':
 
     finally:
         # Call the function to stop the MongoDB client
-        stop_mongodb_client()
+        # stop_mongodb_client()
+        pass
