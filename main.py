@@ -5,6 +5,9 @@ import os
 import telebot
 import requests
 
+from datetime import datetime, timezone, timedelta
+import time
+
 from pymongo import MongoClient
 
 # Set up the MongoDB client and connect to the database
@@ -22,7 +25,7 @@ bot = telebot.TeleBot(API_KEY)
 start_message = "Hello! I am your YouTube playlist bot. How can I assist you?\n" \
                 "1. /add_playlist - Add a new playlist.\n"\
                 "2. /get_latest_video - Get the last video.\n"\
-                "3. /get_all_playlist - Get all subscribed playlists.\n"
+                "3. /get_playlist - Get all  playlists.\n"
 
 
 def get_all_playlists():
@@ -112,6 +115,11 @@ def handle_message(message):
         # If the user sends any other message, respond with the start message and options
         bot.reply_to(message, start_message)
 
+def convert_to_indian_time(utc_time_str):
+    utc_time = datetime.strptime(utc_time_str, '%Y-%m-%dT%H:%M:%SZ')
+    ist_time = utc_time.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=5, minutes=30)))
+    return ist_time.strftime('%Y-%m-%d %H:%M:%S')
+
 def get_playlist_title(playlist_link):
     try:
         playlist_id = playlist_link.split("list=")[-1]
@@ -127,6 +135,7 @@ def get_playlist_title(playlist_link):
         if 'items' in data and len(data['items']) > 0:
 
             playlist_title, last_video_time = get_playlist_info(playlist_link)
+            last_video_time = convert_to_indian_time(last_video_time)
             if playlist_title:
                 # Insert the playlist link and last video time into the database
                 playlist_data = {
