@@ -21,7 +21,28 @@ bot = telebot.TeleBot(API_KEY)
 # Welcome message and options for the user
 start_message = "Hello! I am your YouTube playlist bot. How can I assist you?\n" \
                 "1. /add_playlist - Add a new playlist.\n"\
-                "2. /get_latest_video - Get the last video.\n"
+                "2. /get_latest_video - Get the last video.\n"\
+                "3. /get_all_playlist - Get all subscribed playlists.\n"
+
+
+def get_all_playlists():
+    all_playlists = collection.find({}, {'_id': 0, 'title': 1, 'link': 1})
+    return list(all_playlists)
+
+def send_all_playlists(chat_id):
+    playlists = get_all_playlists()
+    if playlists:
+        message = "List of all playlists:\n"
+        for playlist in playlists:
+            message += f"{playlist['title']}: {playlist['link']}\n"
+        bot.send_message(chat_id, message)
+    else:
+        bot.send_message(chat_id, "No playlists found in the database.")
+
+@bot.message_handler(commands=['get_playlist'])
+def get_playlist_handler(message):
+    chat_id = message.chat.id
+    send_all_playlists(chat_id)
 
 def get_last_video_info(playlist_id):
     base_url = 'https://www.googleapis.com/youtube/v3/playlistItems'
