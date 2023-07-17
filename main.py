@@ -10,6 +10,8 @@ import time
 
 from pymongo import MongoClient
 
+import threading
+
 # Set up the MongoDB client and connect to the database
 client = MongoClient("mongodb+srv://irfanrasheedkc:gTo5RnpsY7mpL2BZ@cluster0.mznznpy.mongodb.net/?retryWrites=true&w=majority")
 db = client['Youtube_Bot']  # Replace 'my_youtube_db' with your preferred database name
@@ -105,7 +107,8 @@ def handle_message(message):
     if message.reply_to_message and message.reply_to_message.text == "Please enter the YouTube playlist link as a reply to this message:":
         playlist_link = message.text.strip()
         print(playlist_link)
-        playlist_title = get_playlist_title(playlist_link)
+        user_chat_id = message.chat.id
+        playlist_title = get_playlist_title(playlist_link,user_chat_id)
         if playlist_title:
             bot.reply_to(message, f"Playlist title: {playlist_title}")
         else:
@@ -120,7 +123,7 @@ def convert_to_indian_time(utc_time_str):
     ist_time = utc_time.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=5, minutes=30)))
     return ist_time.strftime('%Y-%m-%d %H:%M:%S')
 
-def get_playlist_title(playlist_link):
+def get_playlist_title(playlist_link,user_chat_id):
     try:
         playlist_id = playlist_link.split("list=")[-1]
         base_url = 'https://www.googleapis.com/youtube/v3/playlists'
@@ -142,6 +145,7 @@ def get_playlist_title(playlist_link):
                     'link': playlist_link,
                     'title': playlist_title,
                     'last_video_time': last_video_time,
+                    'user_chat_id': user_chat_id
                 }
                 collection.insert_one(playlist_data)
 
@@ -193,5 +197,73 @@ def get_playlist_info(playlist_link):
         print("Error:", e)
         return None, None
 
-# Start the bot
-bot.polling()
+def send_notification(user_chat_id, playlist_title, playlist_link , latest_video_title , latest_video_link , last_video_time):
+    message = f"New video added to playlist '{playlist_title}'\n"
+    message += f"Title: {latest_video_title}\n"
+    message += f"Link: {latest_video_link}\n"
+    message += f"Published Time (IST): {convert_to_indian_time(last_video_time)}"
+
+    try:
+        bot.send_message(user_chat_id, message)
+        # Update the last_video_time in the database only after the notification is successfully sent
+        collection.update_one({'link': playlist_link}, {'$set': {'last_video_time': last_video_time}})
+    except Exception as e:
+        print(f"Error sending notification to user {user_chat_id}: {e}")
+
+def check_playlists():
+    playlists = collection.find()
+    for playlist_info in playlists:
+        playlist_title = playlist_info['title']
+        playlist_link = playlist_info['link']
+        last_db_video_time = playlist_info.get('last_video_time')
+
+        last_api_video_time = get_last_video_time(playlist_link)
+        if not last_api_video_time:
+            continue
+
+        # Convert UTC time to Indian Standard Time (IST)
+        last_api_video_time_ist = convert_to_indian_time(last_api_video_time)
+
+        if last_db_video_time and last_api_video_time != last_db_video_time:
+            # New video found, notify the user
+            user_chat_id = playlist_info['user_chat_id']
+            playlist_id = playlist_link.split("list=")[-1]
+            latest_video_title, latest_video_link = get_last_video_info(playlist_id)
+            message = f"New video added to playlist '{playlist_title}'\nLast Video Time (IST): {last_api_video_time_ist}"
+            send_notification(user_chat_id, playlist_title, playlist_link , latest_video_title , latest_video_link , last_api_video_time)
+
+            # Update the last_video_time in the database
+            collection.update_one({'_id': playlist_info['_id']}, {'$set': {'last_video_time': last_api_video_time}})
+        elif not last_db_video_time:
+            # This is the first time checking, so just update the last_video_time in the database
+            collection.update_one({'_id': playlist_info['_id']}, {'$set': {'last_video_time': last_api_video_time}})
+
+def start_routine_checking(interval_minutes):
+    while True:
+        check_playlists()
+        print("Routine checking complete. Waiting for the next check...")
+        time.sleep(interval_minutes * 60)  # Convert minutes to seconds
+
+# Function to run the bot
+def run_bot():
+    # Start the bot
+    bot.polling()
+
+# Function to stop the MongoDB client after the bot stops polling
+def stop_mongodb_client():
+    client.close()
+
+# Run the bot and the routine checking
+if __name__ == '__main__':
+    try:
+        # Start the routine checking in a separate thread
+        interval_minutes = 0.1
+        checking_thread = threading.Thread(target=start_routine_checking, args=(interval_minutes,))
+        checking_thread.start()
+
+        # Run the bot
+        run_bot()
+
+    finally:
+        # Call the function to stop the MongoDB client
+        stop_mongodb_client()
